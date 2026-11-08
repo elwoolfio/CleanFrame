@@ -1010,7 +1010,7 @@
   var photoMode = null, photoTransitionToken = 0;
   var sheetEl = $('sheet'), sheetView = $('sheetView');
   var IMG = { photo: $('photo'), mat: $('matImg'), bg: $('sheetBg'), field: $('phFieldImg'), fieldAlt: $('phFieldImgAlt'), utility: $('utFieldImg'), utilityAlt: $('utFieldImgAlt') };
-  var sheetKey = '', slotEls = {}, dockEdgeFrame = 0, dockEdgeUntil = 0, dockAnchorCenter = 960;
+  var sheetKey = '', slotEls = {}, dockEdgeFrame = 0, dockOff = 0, dockAnchorCenter = 960;
   var appliedPalette = null, appliedPhoto = null, appliedFont = null, appliedFontMetrics = null;
 
   /* Curated locked palettes keep the existing rendering path exactly. */
@@ -1205,23 +1205,25 @@
     body = S.c.apps === 'text' ? '' : appMark(a, S.c.apps === 'icons' ? 136 : 120, S.c.apps === 'icons' ? 88 : 72, S.c.apps === 'icons' ? 72 : 58);
     return body + (S.c.apps === 'icons' ? '' : '<span class="label" style="font-size:' + dockLabelSize(a.id) + 'px;top:' + ((S.c.apps === 'text' ? 28 : 128) + fontShift('primary', dockLabelSize(a.id))) + 'px"><span class="label-ink">' + esc(a.name) + '</span></span>') + '<span class="nudge nudge-l">' + icon('left') + '</span><span class="nudge nudge-r">' + icon('right') + '</span>';
   }
-  /* A wide label can reach the shelf before its icon. Check the rendered icon box,
-     including during the track's 180ms transition, so both disappear together. */
-  function syncDockEdges() {
+  /* A wide label can reach the shelf before its icon, so a tile whose icon is outside the shelf is hidden.
+     The track only translates, so one measurement gives both ends of its 180ms slide: before it settles, a
+     tile is hidden only if its icon is outside at the start AND at the end. Measuring every frame of the
+     slide instead forced a layout per frame, which this TV engine pays for visibly. */
+  function syncDockEdges(settled) {
     var broad = S.c.layout === 'dock' && S.geom === 'broad', clip = shelf.getBoundingClientRect(), changes = [];
+    var shift = settled ? 0 : clip.left - dockOff - track.getBoundingClientRect().left;
     Array.prototype.forEach.call(track.querySelectorAll('.tile'), function (tile) {
       var content = tile.querySelector(S.c.apps === 'text' ? '.label-ink' : '.mark'), r = content ? content.getBoundingClientRect() : null;
-      var outside = broad && r && (r.right <= clip.left || r.left >= clip.right);
+      var outside = broad && r && (r.right <= clip.left || r.left >= clip.right) && (r.right + shift <= clip.left || r.left + shift >= clip.right);
       var cls = tile.className.replace(/\s+is-outside-icon/g, '') + (outside ? ' is-outside-icon' : '');
       if (tile.className !== cls) changes.push({ tile: tile, cls: cls });
     });
     changes.forEach(function (change) { change.tile.className = change.cls; });
   }
-  function trackDockEdges() {
+  function settleDockEdges() {
     dockEdgeFrame = 0;
     if (S.c.layout !== 'dock' || S.geom !== 'broad') return;
-    syncDockEdges();
-    if (Date.now() < dockEdgeUntil) dockEdgeFrame = window.requestAnimationFrame(trackDockEdges);
+    syncDockEdges(true);
   }
 
   function renderDock(hs) {
@@ -1256,12 +1258,10 @@
       if (hs.mode === 'arrange') attrs(el, 'tile', i, 'arrange.' + (it.kind === 'add' ? 'add' : (it.kind === 'ph' ? 'placeholder.' : 'tile.') + it.id));
       else attrs(el, 'app', i, 'home.app.' + it.id);
     });
+    dockOff = off;
     track.style.transform = 'translate3d(' + (-off) + 'px,0,0)';
-    syncDockEdges();
-    if (g.broad) {
-      dockEdgeUntil = Date.now() + 220;
-      if (!dockEdgeFrame) dockEdgeFrame = window.requestAnimationFrame(trackDockEdges);
-    }
+    syncDockEdges(false);
+    if (g.broad) { clearTimeout(dockEdgeFrame); dockEdgeFrame = setTimeout(settleDockEdges, 220); }
     plate.className = 'plate' + (!n || empty || hs.zone === null ? '' : hs.lifted ? ' on-lift' : tileFocus ? ' on-focus' : tileSel ? ' on-sel' : '');
     plate.style.transform = 'translate3d(' + (anchor * g.pitch) + 'px,0,0)';
 
@@ -1487,12 +1487,13 @@
     if (isSettingsDetail(t)) { focusStatus.className = 'focus-status'; return; }
     var root = isSettingsDetail(top()) ? appearanceEl : sheetEl.hidden ? homeEl : sheetEl, active = root.querySelectorAll('.is-focus[data-action]'), target = null, text = S.err ? 'Not saved. OK tries again.' : '', i, r, sr, scale, x, y, w, action, solid, photoRow = false, photoFree = false;
     Array.prototype.forEach.call(stage.querySelectorAll('.has-local-status'), function (el) { el.className = el.className.replace(/\s+has-local-status/g, ''); });
-    for (i = 0; i < active.length; i++) if (renderedAction(active[i])) { target = active[i]; break; }
     if (!text && t.id === 'arrange' && (t.f.zone === 'act' || t.f.zone === 'tiles')) {
       var slot = t.slots[t.f.i];
       if (slot && !slot.removed && t.f.zone === 'act' && S.c.home.length === 1) text = LAST;
     }
     if (!text && S.note === LAST && t.id === 'arrange') text = LAST;
+    // Only look for the rendered target when there is a status to show: the check forces a layout.
+    if (text) for (i = 0; i < active.length; i++) if (renderedAction(active[i])) { target = active[i]; break; }
     if (!target || !text) { focusStatus.className = 'focus-status'; return; }
     if (target.parentNode === utilsEl && utilsEl.className.indexOf('is-icons') >= 0) { renderUtilFocusLabel(target); focusStatus.className = 'focus-status'; return; }
     // Photo action pills stay on one line; the header already carries this status.
